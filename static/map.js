@@ -17,32 +17,44 @@ const secondaryShipMarkers = {};
 let forecastLayerGroup = L.layerGroup().addTo(map);
 let activeSpillId = null;
 
+const TEAL      = "#14b8a6";
+const TEAL_GLOW = "0 0 0 3px rgba(20,184,166,0.35), 0 0 14px rgba(20,184,166,0.25)";
+
 function makeShipIcon(active = false, isDark = false, isSecondary = false) {
-  let bg = active ? "#10b981" : "#09090b";
-  let border = active ? "#10b981" : "#27272a";
-  let color = active ? "#000" : "#38bdf8";
-  let iconName = "fa-ship";
+  let bg, border, color, iconName, glowShadow;
 
   if (isDark) {
-    bg = active ? "#ef4444" : "#200909";
-    border = "#ef4444";
-    color = "#ef4444";
-    iconName = "fa-ghost";
+    bg         = active ? "#f43f5e" : "#1e0a0d";
+    border     = "#f43f5e";
+    color      = active ? "#fff"    : "#f87171";
+    iconName   = "fa-ghost";
+    glowShadow = active
+      ? "0 0 0 3px rgba(244,63,94,0.4), 0 0 14px rgba(244,63,94,0.3)"
+      : "0 2px 8px rgba(0,0,0,0.8)";
   } else if (isSecondary) {
-    bg = active ? "#a855f7" : "#12081c";
-    border = active ? "#a855f7" : "#7e22ce";
-    color = "#c084fc";
-    iconName = "fa-ship";
+    bg         = active ? "#a855f7" : "#110a1f";
+    border     = active ? "#a855f7" : "#7e22ce";
+    color      = "#c084fc";
+    iconName   = "fa-ship";
+    glowShadow = active
+      ? "0 0 0 3px rgba(168,85,247,0.4), 0 0 14px rgba(168,85,247,0.3)"
+      : "0 2px 8px rgba(0,0,0,0.8)";
+  } else {
+    bg         = active ? TEAL   : "#0c0f14";
+    border     = active ? TEAL   : "#2a3040";
+    color      = active ? "#000" : "#38bdf8";
+    iconName   = "fa-ship";
+    glowShadow = active ? TEAL_GLOW : "0 2px 8px rgba(0,0,0,0.8)";
   }
 
   return L.divIcon({
     className: "",
     html: `<div style="
       background:${bg};
-      width:28px;height:28px;border-radius:6px;
+      width:28px;height:28px;border-radius:4px;
       display:grid;place-items:center;
-      box-shadow:0 0 12px rgba(0,0,0,0.8);
-      border:1px solid ${border};
+      box-shadow:${glowShadow};
+      border:1.5px solid ${border};
       font-size:12px;color:${color};">
       <i class='fa-solid ${iconName}'></i>
     </div>`,
@@ -192,7 +204,7 @@ function selectSpill(id) {
   if (!spill) return;
 
   const isDark = spill.vessel && spill.vessel.is_dark;
-  slickLayers[id].setStyle({ color: "#10b981", weight: 2, fillOpacity: 0.4 });
+  slickLayers[id].setStyle({ color: TEAL, weight: 2.5, fillOpacity: 0.38 });
   if (shipMarkers[id]) {
     shipMarkers[id].setIcon(makeShipIcon(true, isDark, false));
   }
@@ -284,15 +296,38 @@ function openDetail(spill) {
   document.getElementById("v-type").textContent = spill.vessel.type;
   document.getElementById("v-len").textContent = `${spill.vessel.length_m} m`;
 
+  // GFW "Know More" — search by IMO on Global Fishing Watch
+  const gfwWrap = document.getElementById("gfw-row-wrap");
+  if (gfwWrap) {
+    const imo = spill.vessel.imo;
+    const mmsi = spill.vessel.mmsi;
+    const searchQuery = (imo && imo !== "N/A" && imo !== "UNKNOWN" && imo !== "—") ? imo : mmsi;
+    const gfwUrl = `https://globalfishingwatch.org/map/vessel-search?query=${encodeURIComponent(searchQuery)}`;
+    gfwWrap.innerHTML = `
+      <div class="gfw-row">
+        <span class="gfw-label">
+          <i class="fa-solid fa-fish" aria-hidden="true" style="color:var(--teal);"></i>
+          Know more on Global Fishing Watch
+        </span>
+        <a class="gfw-link" href="${gfwUrl}" target="_blank" rel="noopener noreferrer"
+           aria-label="Search vessel ${searchQuery} on Global Fishing Watch">
+          <i class="fa-solid fa-arrow-up-right-from-square" aria-hidden="true"></i>
+          Track on GFW →
+        </a>
+      </div>`;
+  }
+
   // Secondary Vessel Container (if 2 ships in incident)
   const secWrap = document.getElementById("sec-vessel-wrap");
   if (secWrap) {
     if (spill.secondary_vessel) {
       const sv = spill.secondary_vessel;
+      const svImo = (sv.imo && sv.imo !== "N/A" && sv.imo !== "UNKNOWN" && sv.imo !== "—") ? sv.imo : sv.mmsi;
+      const svGfwUrl = `https://globalfishingwatch.org/map/vessel-search?query=${encodeURIComponent(svImo)}`;
       secWrap.innerHTML = `
         <div class="sec-vessel-box">
           <div class="sec-vessel-title">
-            <i class="fa-solid fa-ship"></i> Coincident Candidate #2 (Corridor / STS Partner)
+            <i class="fa-solid fa-ship" aria-hidden="true"></i> Coincident Candidate #2 (Corridor / STS Partner)
           </div>
           <div class="vessel-grid">
             <div><span class="vl">Name</span><span class="vv">${sv.name}</span></div>
@@ -301,6 +336,13 @@ function openDetail(spill) {
             <div><span class="vl">Flag</span><span class="vv">${sv.flag}</span></div>
             <div><span class="vl">Type</span><span class="vv">${sv.type}</span></div>
             <div><span class="vl">Length</span><span class="vv">${sv.length_m} m</span></div>
+          </div>
+          <div style="margin-top:10px;">
+            <a class="gfw-link" href="${svGfwUrl}" target="_blank" rel="noopener noreferrer"
+               aria-label="Search vessel ${svImo} on Global Fishing Watch" style="display:inline-flex;">
+              <i class="fa-solid fa-arrow-up-right-from-square" aria-hidden="true"></i>
+              Track on GFW →
+            </a>
           </div>
         </div>`;
     } else {
@@ -521,8 +563,43 @@ function initPanelResizer() {
   resizer.addEventListener("touchstart", onPointerDown, { passive: true });
 }
 
+function initSearch() {
+  const input    = document.getElementById("search-input");
+  const noResult = document.getElementById("no-results");
+  if (!input) return;
+
+  input.addEventListener("input", () => {
+    const q = input.value.trim().toLowerCase();
+    const cards = document.querySelectorAll(".spill-card");
+    let visibleCount = 0;
+
+    cards.forEach(card => {
+      const spill = window._spills && window._spills.find(s => `card-${s.id}` === card.id);
+      if (!spill) return;
+      const haystack = `${spill.name} ${spill.location} ${spill.eez} ${spill.satellite}`.toLowerCase();
+      const match = !q || haystack.includes(q);
+      card.style.display = match ? "" : "none";
+      if (match) visibleCount++;
+    });
+
+    if (noResult) {
+      noResult.style.display = (visibleCount === 0 && q) ? "block" : "none";
+    }
+  });
+
+  // Escape clears search
+  input.addEventListener("keydown", e => {
+    if (e.key === "Escape") {
+      input.value = "";
+      input.dispatchEvent(new Event("input"));
+      input.blur();
+    }
+  });
+}
+
 async function boot() {
   initPanelResizer();
+  initSearch();
   try {
     const res = await fetch("/api/spills");
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
