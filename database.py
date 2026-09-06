@@ -2,7 +2,7 @@ from sqlalchemy import create_engine, Column, Integer, String, Float, ForeignKey
 from sqlalchemy.orm import declarative_base, sessionmaker, relationship
 from geoalchemy2 import Geometry
 
-DATABASE_URL = "postgresql://postgres.zgobwbywkzkjurcywqdu:Abkibaar150par@aws-0-ap-southeast-2.pooler.supabase.com:6543/postgres"
+DATABASE_URL = "postgresql://postgres.hmjmqnshlpoxyoblpwti:Abkibaar150paar@aws-0-ap-south-1.pooler.supabase.com:6543/postgres"
 
 engine = create_engine(DATABASE_URL, pool_pre_ping=True)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
