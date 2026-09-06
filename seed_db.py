@@ -1,34 +1,29 @@
-import random
 import math
-from datetime import datetime, timedelta, timezone
-from shapely.geometry import Point, LineString, Polygon
+from datetime import datetime, timezone
+from shapely.geometry import LineString, Polygon
 from database import SessionLocal, Vessel, Incident, SpatialData, Base, engine
 
 print("Resetting database tables...")
 Base.metadata.drop_all(bind=engine)
 Base.metadata.create_all(bind=engine)
 
-def make_trailing_wake(lon: float, lat: float, heading_deg: float, length_km: float):
+# ── Geometry helpers ──────────────────────────────────────────────────────────
+
+def make_trailing_wake(lon, lat, heading_deg, length_km):
     rad = math.radians(heading_deg)
     ux, uy = math.sin(rad), math.cos(rad)
     nx, ny = -uy, ux
-    
-    len_deg = length_km / 111.0
-    half_l = len_deg * 0.5
+    len_deg  = length_km / 111.0
+    half_l   = len_deg * 0.5
     ship_lon = lon + half_l * ux
     ship_lat = lat + half_l * uy
-    
-    w_start = (lon - half_l * ux, lat - half_l * uy)
-    w_mid1  = (lon - half_l * 0.35 * ux + 0.004 * nx, lat - half_l * 0.35 * uy + 0.004 * ny)
-    w_mid2  = (lon + half_l * 0.35 * ux - 0.002 * nx, lat + half_l * 0.35 * uy - 0.002 * ny)
-    w_ship  = (ship_lon, ship_lat)
-    track = LineString([w_start, w_mid1, w_mid2, w_ship])
-    
-    w_head = (ship_lon - 0.015 * ux, ship_lat - 0.015 * uy)
-    tail_w = random.uniform(0.012, 0.018)
-    mid_w  = tail_w * 0.65
-    head_w = 0.0035
-    
+    w_start  = (lon - half_l * ux, lat - half_l * uy)
+    w_mid1   = (lon - half_l * 0.35 * ux + 0.004 * nx, lat - half_l * 0.35 * uy + 0.004 * ny)
+    w_mid2   = (lon + half_l * 0.35 * ux - 0.002 * nx, lat + half_l * 0.35 * uy - 0.002 * ny)
+    w_ship   = (ship_lon, ship_lat)
+    track    = LineString([w_start, w_mid1, w_mid2, w_ship])
+    w_head   = (ship_lon - 0.015 * ux, ship_lat - 0.015 * uy)
+    tail_w, mid_w, head_w = 0.015, 0.010, 0.0035
     p_tail_tip = (w_start[0] - 0.01 * ux, w_start[1] - 0.01 * uy)
     p_tail_l   = (w_start[0] + tail_w * nx, w_start[1] + tail_w * ny)
     p_mid_l    = (lon + mid_w * nx, lat + mid_w * ny)
@@ -36,284 +31,434 @@ def make_trailing_wake(lon: float, lat: float, heading_deg: float, length_km: fl
     p_head_r   = (w_head[0] - head_w * nx, w_head[1] - head_w * ny)
     p_mid_r    = (lon - mid_w * nx, lat - mid_w * ny)
     p_tail_r   = (w_start[0] - tail_w * nx, w_start[1] - tail_w * ny)
-    
-    poly = Polygon([p_tail_tip, p_tail_l, p_mid_l, p_head_l, w_head, p_head_r, p_mid_r, p_tail_r, p_tail_tip]).buffer(0.002)
+    poly = Polygon([p_tail_tip, p_tail_l, p_mid_l, p_head_l, w_head,
+                    p_head_r, p_mid_r, p_tail_r, p_tail_tip]).buffer(0.002)
     return track, poly, ship_lon, ship_lat
 
-def make_wind_drift_pool(lon: float, lat: float, heading_deg: float, length_km: float):
+def make_wind_drift_pool(lon, lat, heading_deg, length_km):
     rad = math.radians(heading_deg)
     ux, uy = math.sin(rad), math.cos(rad)
-    nx, ny = -uy, ux
-    
-    len_deg = length_km / 111.0
-    half_l = len_deg * 0.5
+    len_deg  = length_km / 111.0
+    half_l   = len_deg * 0.5
     ship_lon = lon + half_l * ux
     ship_lat = lat + half_l * uy
-    
-    # Vessel track continues along its corridor
-    w_start = (lon - half_l * ux, lat - half_l * uy)
-    w_ship  = (ship_lon, ship_lat)
-    track = LineString([w_start, (lon, lat), w_ship])
-    
-    # Slick has been sheared and drifted away from the track by crosswind/current
-    drift_angle = rad + random.choice([1.3, -1.3])
-    drift_dist = random.uniform(0.025, 0.04) # ~3-5 km downwind
-    pool_cx = lon + math.sin(drift_angle) * drift_dist
-    pool_cy = lat + math.cos(drift_angle) * drift_dist
-    
-    # Irregular amorphous pooling cloud if there is any aise toh hota nahi 
-    pts = []
-    num_pts = 16
-    r_base = random.uniform(0.022, 0.038)
-    for i in range(num_pts):
-        ang = (2 * math.pi * i) / num_pts
+    track    = LineString([(lon - half_l * ux, lat - half_l * uy), (lon, lat), (ship_lon, ship_lat)])
+    drift_angle = rad + 1.3
+    pool_cx = lon + math.sin(drift_angle) * 0.032
+    pool_cy = lat + math.cos(drift_angle) * 0.032
+    pts, r_base = [], 0.030
+    for i in range(16):
+        ang = (2 * math.pi * i) / 16
         r = r_base * (1.0 + 0.32 * math.sin(3 * ang) + 0.18 * math.cos(2 * ang))
         pts.append((pool_cx + r * math.cos(ang) * 1.3, pool_cy + r * math.sin(ang) * 0.85))
     pts.append(pts[0])
     poly = Polygon(pts).buffer(0.0025)
     return track, poly, ship_lon, ship_lat
 
-def make_anchorage_pool(lon: float, lat: float, heading_deg: float):
-    # Stationary orr anchored ship has minimal swing movement
+def make_secondary_track(base_lon, base_lat, d_lon, d_lat, heading_deg):
+    sec_lon = base_lon + d_lon
+    sec_lat = base_lat + d_lat
     rad = math.radians(heading_deg)
-    ux, uy = math.sin(rad), math.cos(rad)
-    
-    ship_lon = lon + 0.004 * ux
-    ship_lat = lat + 0.004 * uy
-    track = LineString([(lon - 0.006 * ux, lat - 0.006 * uy), (lon, lat), (ship_lon, ship_lat)])
-    
-    # Concentrated spreading circular/elliptical pool around vessel
-    pts = []
-    num_pts = 16
-    r_base = random.uniform(0.018, 0.03)
-    for i in range(num_pts):
-        ang = (2 * math.pi * i) / num_pts
-        r = r_base * (1.0 + 0.25 * math.sin(2 * ang) + 0.12 * math.cos(4 * ang))
-        pts.append((lon + r * math.cos(ang) * 1.1, lat + r * math.sin(ang) * 0.95))
-    pts.append(pts[0])
-    poly = Polygon(pts).buffer(0.002)
-    return track, poly, ship_lon, ship_lat
+    track = LineString([
+        (sec_lon - 0.15 * math.sin(rad), sec_lat - 0.15 * math.cos(rad)),
+        (sec_lon - 0.05 * math.sin(rad), sec_lat - 0.05 * math.cos(rad)),
+        (sec_lon, sec_lat)
+    ])
+    return track, sec_lon, sec_lat
 
-# Configuration of all 25 incidents with morphology types, dark ship status, and secondary vessels
-LOCATIONS = [
-    # 01: Mumbai High - 2 SHIPS (Crude Tanker + OSV Support Vessel)
+# ── Hardcoded incident data — matches provided JSON exactly ───────────────────
+# secondary_vessel fields: (name, mmsi, imo, flag, type, length_m, d_lon, d_lat, heading)
+
+INCIDENTS = [
+    # 01 RATNAGIRI
     {
-        "loc": "Mumbai High Offshore", "eez": "Indian EEZ", "lat": 19.35, "lon": 71.35,
-        "heading": 325, "type": "Trailing Wake", "dark": False,
-        "vessel": ("MT Swarna Godavari", "Crude Tanker", "India", "322418569", "9054400", 240),
-        "sec_vessel": ("OSV Garware Pride", "Offshore Supply Vessel", "India", "419000214", "9412030", 72, -0.04, 0.03, 310)
+        "name": "RATNAGIRI INC-001", "spill_type": "Trailing Wake",
+        "date": "2025-10-10T01:03:46Z", "date_display": "10 October 2025   01:03 UTC",
+        "location": "Offshore Ratnagiri / Konkan Coast",
+        "area_km2": 29.8, "length_km": 56.0,
+        "eez": "India", "status": "Confirmed",
+        "satellite": "Sentinel-1A", "orbit_pass": "S1A_IW_GRDH_1SDV_2025101",
+        "confidence": 98, "category": "Normal Vessel", "comment": None,
+        "center_lat": 17.538, "center_lon": 72.878, "heading": 160,
+        "vessel": ("Ark Prestige", "419559000", "9116242", "India", "Other", 150, False),
+        "sec_vessel": None,
     },
-    # 02: JNPT Approach - 2 SHIPS (Container ship + Harbour Tug)
+    # 02 MAHARASHTRA
     {
-        "loc": "JNPT Approach Channel", "eez": "Indian Territorial Waters", "lat": 18.85, "lon": 72.50,
-        "heading": 75, "type": "Wind-Drift Pool", "dark": False,
-        "vessel": ("MV MSC Mumbai", "Container", "Liberia", "636018920", "9720445", 295),
-        "sec_vessel": ("Tug Jawahar-II", "Tug / Pilot Vessel", "India", "419001880", "9201402", 34, 0.02, -0.02, 80)
+        "name": "MAHARASHTRA INC-002", "spill_type": "Trailing Wake",
+        "date": "2026-06-12T01:10:54Z", "date_display": "12 June 2026   01:10 UTC",
+        "location": "Offshore Maharashtra Limits",
+        "area_km2": 6.8, "length_km": 26.0,
+        "eez": "India", "status": "Confirmed",
+        "satellite": "Sentinel-1A", "orbit_pass": "S1A_IW_GRDH_1SDV_2026061",
+        "confidence": 94, "category": "Normal Vessel", "comment": None,
+        "center_lat": 19.953, "center_lon": 71.681, "heading": 320,
+        "vessel": ("Desh Bhakt", "419474000", "9232905", "India", "Crude Tanker", 244, False),
+        "sec_vessel": None,
     },
-    # 03: Ratnagiri Coastal Offing - DARK VESSEL (Illegal bilge discharge with transponder switched off)
+    # 03 GULF-OF-KUTCH
     {
-        "loc": "Ratnagiri Coastal Offing", "eez": "Indian EEZ", "lat": 16.98, "lon": 72.95,
-        "heading": 165, "type": "Trailing Wake", "dark": True,
-        "vessel": ("UNIDENTIFIED TANKER (SAR TARGET)", "Chemical Tanker", "Non-Broadcasting", "[AIS SILENT]", "UNKNOWN", 185),
-        "sec_vessel": None
+        "name": "GULF-OF-KUTCH INC-003", "spill_type": "Trailing Wake",
+        "date": "2025-11-13T01:18:40Z", "date_display": "13 November 2025   01:18 UTC",
+        "location": "Gulf of Kutch Approach",
+        "area_km2": 4.2, "length_km": 23.0,
+        "eez": "India", "status": "Confirmed",
+        "satellite": "Sentinel-1A", "orbit_pass": "S1A_IW_GRDH_1SDV_2025111",
+        "confidence": 92, "category": "Normal Vessel", "comment": None,
+        "center_lat": 22.628, "center_lon": 69.627, "heading": 90,
+        "vessel": ("Yc Pansy", "441046000", "9311256", "Unknown", "Other", 150, False),
+        "sec_vessel": None,
     },
-    # 04: Sindhudurg - Trailing Wake
+    # 04 KARACHI-OFFING — 2 SHIPS (STS transfer / AIS dark event partner)
     {
-        "loc": "Sindhudurg Marine Zone", "eez": "Indian EEZ", "lat": 16.15, "lon": 73.18,
-        "heading": 345, "type": "Trailing Wake", "dark": False,
-        "vessel": ("MV Konkan Pearl", "Bulk Carrier", "Marshall Islands", "538004120", "9488112", 225),
-        "sec_vessel": None
+        "name": "KARACHI-OFFING INC-004", "spill_type": "Trailing Wake",
+        "date": "2026-02-27T01:34:34Z", "date_display": "27 February 2026   01:34 UTC",
+        "location": "North Arabian Sea / Pakistan Offing",
+        "area_km2": 14.3, "length_km": 53.0,
+        "eez": "Pakistan", "status": "Confirmed",
+        "satellite": "Sentinel-1A", "orbit_pass": "S1A_IW_GRDH_1SDV_2026022",
+        "confidence": 96, "category": "Normal Vessel",
+        "comment": "3 AIS off events recorded. Coincident vessel detected in proximity during discharge window.",
+        "center_lat": 24.032, "center_lon": 64.742, "heading": 245,
+        "vessel": ("Maritime Comity", "563108600", "9848326", "China", "Other", 150, False),
+        "sec_vessel": ("Euphrates River", "431010550", "9134876",
+                       "Marshall Islands", "Chemical Tanker", 155,
+                       -0.04, 0.02, 250),
     },
-    # 05: Tarapur Offshore - Anchorage / Mooring Pool
+    # 05 LACCADIVE
     {
-        "loc": "Tarapur Offshore", "eez": "Indian EEZ", "lat": 19.82, "lon": 72.35,
-        "heading": 190, "type": "Anchorage Pool", "dark": False,
-        "vessel": ("MT Desh Bhakta", "Crude Tanker", "India", "419000551", "9251800", 244),
-        "sec_vessel": None
+        "name": "LACCADIVE INC-005", "spill_type": "Trailing Wake",
+        "date": "2026-06-21T00:49:06Z", "date_display": "21 June 2026   00:49 UTC",
+        "location": "Laccadive Sea / Kerala Coast",
+        "area_km2": 9.2, "length_km": 48.0,
+        "eez": "India", "status": "Confirmed",
+        "satellite": "Sentinel-1A", "orbit_pass": "S1A_IW_GRDH_1SDV_2026062",
+        "confidence": 93, "category": "Normal Vessel", "comment": None,
+        "center_lat": 10.582, "center_lon": 75.125, "heading": 140,
+        "vessel": ("Bass", "538009014", "9885908", "China", "Other", 150, False),
+        "sec_vessel": None,
     },
-    # 06: Alibaug Coastal Limits - Wind Drift Pool
+    # 06 ANDHRA
     {
-        "loc": "Alibaug Coastal Limits", "eez": "Indian Territorial Waters", "lat": 18.60, "lon": 72.75,
-        "heading": 280, "type": "Wind-Drift Pool", "dark": False,
-        "vessel": ("MV Alibaug Express", "Cargo", "India", "419000882", "9301244", 135),
-        "sec_vessel": None
+        "name": "ANDHRA INC-006", "spill_type": "Trailing Wake",
+        "date": "2025-12-20T00:22:49Z", "date_display": "20 December 2025   00:22 UTC",
+        "location": "Bay of Bengal / Andhra Coast",
+        "area_km2": 6.8, "length_km": 22.0,
+        "eez": "India", "status": "Confirmed",
+        "satellite": "Sentinel-1A", "orbit_pass": "S1A_IW_GRDH_1SDV_2025122",
+        "confidence": 95, "category": "Normal Vessel", "comment": "Tagged: Sanctioned",
+        "center_lat": 16.631, "center_lon": 82.836, "heading": 20,
+        "vessel": ("Shiva", "518998181", "9427146", "Cook Islands", "Other", 150, False),
+        "sec_vessel": None,
     },
-    # 07: Vasai-Virar Offing - Trailing Wake
+    # 07 SRI-LANKA — 2 SHIPS (existing from provided data)
     {
-        "loc": "Vasai-Virar Offing", "eez": "Indian EEZ", "lat": 19.38, "lon": 72.58,
-        "heading": 215, "type": "Trailing Wake", "dark": False,
-        "vessel": ("MT Surya", "Oil Products Tanker", "Panama", "354112000", "9192800", 175),
-        "sec_vessel": None
+        "name": "SRI-LANKA INC-007", "spill_type": "Trailing Wake",
+        "date": "2026-05-18T00:00:00Z", "date_display": "18 May 2026   00:00 UTC",
+        "location": "Southern Sri Lanka TSS Lane",
+        "area_km2": 23.0, "length_km": 42.0,
+        "eez": "Sri Lanka", "status": "Confirmed",
+        "satellite": "Sentinel-1A", "orbit_pass": "S1A_IW_GRDH_1SDV_PASS",
+        "confidence": 97, "category": "Normal Vessel",
+        "comment": "Multi-vessel corridor incident (2 vessels coincident with slick footprint)",
+        "center_lat": 5.850, "center_lon": 80.520, "heading": 130,
+        "vessel": ("One Milano", "371076000", "9757187", "Panama", "Cargo", 175, False),
+        "sec_vessel": ("Navios Coral", "354552000", "9774264",
+                       "Panama", "Cargo", 175,
+                       0.04, 0.05, 135),
     },
-    # 08: Murud-Janjira Approach - Anchorage Pool
+    # 08 MID-ATLANTIC
     {
-        "loc": "Murud-Janjira Approach", "eez": "Indian EEZ", "lat": 18.32, "lon": 72.80,
-        "heading": 150, "type": "Anchorage Pool", "dark": False,
-        "vessel": ("MV Sea Fortune", "Cargo", "Liberia", "636091220", "9445100", 160),
-        "sec_vessel": None
+        "name": "MID-ATLANTIC INC-008", "spill_type": "Trailing Wake",
+        "date": "2026-07-31T22:49:48Z", "date_display": "31 July 2026   22:49 UTC",
+        "location": "US East Coast / Mid-Atlantic Bight",
+        "area_km2": 7.7, "length_km": 59.0,
+        "eez": "United States", "status": "Confirmed",
+        "satellite": "Sentinel-1D", "orbit_pass": "S1D_IW_GRDH_1SDV_2026073",
+        "confidence": 94, "category": "Normal Vessel", "comment": None,
+        "center_lat": 37.990, "center_lon": -74.480, "heading": 45,
+        "vessel": ("Cma Cgm Louga", "248655000", "9745550", "Malta", "Cargo", 175, False),
+        "sec_vessel": None,
     },
-    # 09: Gulf of Khambhat - Trailing Wake
+    # 09 CELTIC-SEA — 2 SHIPS (Bay of Biscay corridor, added)
     {
-        "loc": "Gulf of Khambhat", "eez": "Indian EEZ", "lat": 20.55, "lon": 72.05,
-        "heading": 25, "type": "Trailing Wake", "dark": False,
-        "vessel": ("MT Gujarat Glory", "Crude Tanker", "India", "419000780", "9277410", 250),
-        "sec_vessel": None
+        "name": "CELTIC-SEA INC-009", "spill_type": "Trailing Wake",
+        "date": "2026-08-25T06:39:53Z", "date_display": "25 August 2026   06:39 UTC",
+        "location": "Bay of Biscay / French Atlantic Slope",
+        "area_km2": 13.9, "length_km": 44.0,
+        "eez": "France", "status": "Confirmed",
+        "satellite": "Sentinel-1C", "orbit_pass": "S1C_IW_GRDH_1SDV_2026082",
+        "confidence": 93, "category": "Normal Vessel",
+        "comment": "Two vessels detected coincident with slick footprint in Atlantic outbound lane.",
+        "center_lat": 47.547, "center_lon": -6.914, "heading": 250,
+        "vessel": ("Clyde", "314001065", "9298416", "Unknown", "Other", 150, False),
+        "sec_vessel": ("Cap Lopez", "228338800", "9308786",
+                       "France", "Cargo", 180,
+                       0.025, -0.015, 245),
     },
-    # 10: Goa Maritime Boundary - DARK VESSEL (Unlicensed iron ore bulk carrier operating dark)
+    # 10 NORTH-SEA
     {
-        "loc": "Goa Maritime Boundary", "eez": "Indian EEZ", "lat": 15.52, "lon": 73.45,
-        "heading": 250, "type": "Wind-Drift Pool", "dark": True,
-        "vessel": ("DARK BULK CARRIER #7741", "Bulk Carrier", "Non-Broadcasting", "[AIS SILENT]", "UNKNOWN", 190),
-        "sec_vessel": None
+        "name": "NORTH-SEA INC-010", "spill_type": "Trailing Wake",
+        "date": "2026-08-18T05:57:07Z", "date_display": "18 August 2026   05:57 UTC",
+        "location": "German Bight / North Sea Corridor",
+        "area_km2": 0.4, "length_km": 4.0,
+        "eez": "Germany", "status": "Confirmed",
+        "satellite": "Sentinel-1D", "orbit_pass": "S1D_IW_GRDH_1SDV_2026081",
+        "confidence": 92, "category": "Normal Vessel", "comment": None,
+        "center_lat": 55.109, "center_lon": 5.282, "heading": 320,
+        "vessel": ("Andrea", "219031446", "9428188", "Denmark", "Cargo", 175, False),
+        "sec_vessel": None,
     },
-    # 11: Mangalore Port Limits - Anchorage Pool
+    # 11 BALTIC-SEA
     {
-        "loc": "Mangalore Port Limits", "eez": "Indian Territorial Waters", "lat": 12.85, "lon": 74.65,
-        "heading": 105, "type": "Anchorage Pool", "dark": False,
-        "vessel": ("MT Nethravathi", "Chemical Tanker", "India", "419000910", "9321550", 145),
-        "sec_vessel": None
+        "name": "BALTIC-SEA INC-011", "spill_type": "Trailing Wake",
+        "date": "2024-05-30T04:59:45Z", "date_display": "30 May 2024   04:59 UTC",
+        "location": "Central Baltic Sea / Swedish Waters",
+        "area_km2": 4.5, "length_km": 51.0,
+        "eez": "Sweden", "status": "Confirmed",
+        "satellite": "Sentinel-1A", "orbit_pass": "S1A_IW_GRDH_1SDV_2024053",
+        "confidence": 95, "category": "Normal Vessel", "comment": "1 AIS off event recorded",
+        "center_lat": 57.477, "center_lon": 19.421, "heading": 70,
+        "vessel": ("Rinia", "256308000", "9594406", "Malta", "Cargo", 175, False),
+        "sec_vessel": None,
     },
-    # 12: Kochi Offshore Basin - Trailing Wake
+    # 12 HOKKAIDO
     {
-        "loc": "Kochi Offshore Basin", "eez": "Indian EEZ", "lat": 9.95, "lon": 75.92,
-        "heading": 135, "type": "Trailing Wake", "dark": False,
-        "vessel": ("MV Kerala Star", "Container", "Panama", "371004550", "9644020", 280),
-        "sec_vessel": None
+        "name": "HOKKAIDO INC-012", "spill_type": "Trailing Wake",
+        "date": "2024-07-30T20:33:33Z", "date_display": "30 July 2024   20:33 UTC",
+        "location": "Tsugaru Strait / Northern Japan Offing",
+        "area_km2": 4.7, "length_km": 65.0,
+        "eez": "Japan", "status": "Confirmed",
+        "satellite": "Sentinel-1A", "orbit_pass": "S1A_IW_GRDH_1SDV_2024073",
+        "confidence": 96, "category": "Normal Vessel", "comment": "1 AIS off event recorded",
+        "center_lat": 41.563, "center_lon": 142.156, "heading": 210,
+        "vessel": ("Fuga", "373680000", "9624615", "Panama", "Cargo", 175, False),
+        "sec_vessel": None,
     },
-    # 13: Chennai Coastal Zone - Trailing Wake
+    # 13 ALASKA-COAST
     {
-        "loc": "Chennai Coastal Zone", "eez": "Indian EEZ", "lat": 13.15, "lon": 80.45,
-        "heading": 15, "type": "Trailing Wake", "dark": False,
-        "vessel": ("MT Coromandel", "Crude Tanker", "India", "419000620", "9288100", 235),
-        "sec_vessel": None
+        "name": "ALASKA-COAST INC-013", "spill_type": "Trailing Wake",
+        "date": "2024-09-10T02:54:23Z", "date_display": "10 September 2024   02:54 UTC",
+        "location": "Gulf of Alaska / Alexander Archipelago",
+        "area_km2": 2.0, "length_km": 36.0,
+        "eez": "United States (Alaska)", "status": "Confirmed",
+        "satellite": "Sentinel-1A", "orbit_pass": "S1A_IW_GRDH_1SDV_2024091",
+        "confidence": 95, "category": "Normal Vessel", "comment": "1 AIS off event recorded",
+        "center_lat": 56.613, "center_lon": -135.642, "heading": 115,
+        "vessel": ("Crown Princess", "310500000", "9293399", "Bermuda", "Passenger", 290, False),
+        "sec_vessel": None,
     },
-    # 14: Visakhapatnam Offing - Wind Drift Pool
+    # 14 IRAN-OFFSHORE
     {
-        "loc": "Visakhapatnam Offing", "eez": "Indian EEZ", "lat": 17.65, "lon": 83.48,
-        "heading": 50, "type": "Wind-Drift Pool", "dark": False,
-        "vessel": ("MV Vizag Pride", "Cargo", "India", "419001150", "9411900", 170),
-        "sec_vessel": None
+        "name": "IRAN-OFFSHORE INC-014", "spill_type": "Trailing Wake",
+        "date": "2024-09-28T02:31:29Z", "date_display": "28 September 2024   02:31 UTC",
+        "location": "Persian Gulf / Iranian Offing",
+        "area_km2": 26.6, "length_km": 80.0,
+        "eez": "Iran", "status": "Confirmed",
+        "satellite": "Sentinel-1A", "orbit_pass": "S1A_IW_GRDH_1SDV_2024092",
+        "confidence": 97, "category": "Normal Vessel", "comment": None,
+        "center_lat": 27.346, "center_lon": 51.853, "heading": 125,
+        "vessel": ("Samanta", "341107001", "9000297", "St. Kitts & Nevis", "Cargo", 175, False),
+        "sec_vessel": None,
     },
-    # 15: Gulf of Kutch - Anchorage / Single Point Mooring Pool
+    # 15 RED-SEA
     {
-        "loc": "Gulf of Kutch", "eez": "Indian EEZ", "lat": 22.55, "lon": 69.05,
-        "heading": 85, "type": "Anchorage Pool", "dark": False,
-        "vessel": ("MT Kutch Energy", "Oil Products Tanker", "Marshall Islands", "538006120", "9512300", 210),
-        "sec_vessel": None
+        "name": "RED-SEA INC-015", "spill_type": "Trailing Wake",
+        "date": "2026-03-30T15:38:59Z", "date_display": "30 March 2026   15:38 UTC",
+        "location": "Northern Red Sea / Egyptian Waters",
+        "area_km2": 8.5, "length_km": 10.0,
+        "eez": "Egypt", "status": "Confirmed",
+        "satellite": "Sentinel-1A", "orbit_pass": "S1A_IW_GRDH_1SDV_2026033",
+        "confidence": 93, "category": "Normal Vessel", "comment": "1 AIS off event recorded",
+        "center_lat": 25.622, "center_lon": 35.621, "heading": 340,
+        "vessel": ("Saga", "248964000", "9528031", "Malta", "Other", 150, False),
+        "sec_vessel": None,
     },
-    # 16: Gulf of Mexico - Louisiana - Trailing Wake
+    # 16 COROMANDEL-DARK
     {
-        "loc": "Gulf of Mexico - Louisiana", "eez": "US EEZ", "lat": 28.55, "lon": -90.05,
-        "heading": 145, "type": "Trailing Wake", "dark": False,
-        "vessel": ("MT Pelican State", "Crude Tanker", "USA", "367112040", "9455110", 260),
-        "sec_vessel": None
+        "name": "COROMANDEL-DARK INC-016", "spill_type": "Trailing Wake",
+        "date": "2026-08-05T00:31:49Z", "date_display": "05 August 2026   00:31 UTC",
+        "location": "Coromandel Coast / Palk Strait Offing",
+        "area_km2": 0.4, "length_km": 4.0,
+        "eez": "India", "status": "Under Investigation",
+        "satellite": "Sentinel-1D", "orbit_pass": "S1D_IW_GRDH_1SDV_2026080",
+        "confidence": 91, "category": "Dark Vessel",
+        "comment": "Unidentified non-broadcasting radar contact detected via SAR backscatter",
+        "center_lat": 10.922, "center_lon": 79.958, "heading": 95,
+        "vessel": ("DARK VESSEL #D148.068375", "D148.068375", "UNKNOWN",
+                   "Non-Broadcasting", "Dark Vessel", 150, True),
+        "sec_vessel": None,
     },
-    # 17: Gulf of Mexico - Texas - Wind Drift Pool
+    # 17 BENGAL-DARK
     {
-        "loc": "Gulf of Mexico - Texas", "eez": "US EEZ", "lat": 27.85, "lon": -93.55,
-        "heading": 70, "type": "Wind-Drift Pool", "dark": False,
-        "vessel": ("MV Lone Star", "Bulk Carrier", "Panama", "355001220", "9399810", 215),
-        "sec_vessel": None
+        "name": "BENGAL-DARK INC-017", "spill_type": "Trailing Wake",
+        "date": "2026-01-21T23:56:55Z", "date_display": "21 January 2026   23:56 UTC",
+        "location": "North Bay of Bengal / Offshore West Bengal",
+        "area_km2": 25.5, "length_km": 92.0,
+        "eez": "India", "status": "Under Investigation",
+        "satellite": "Sentinel-1A", "orbit_pass": "S1A_IW_GRDH_1SDV_2026012",
+        "confidence": 92, "category": "Dark Vessel",
+        "comment": "Vessel position at 19.988, 89.211 with length ~140m",
+        "center_lat": 20.281, "center_lon": 88.932, "heading": 185,
+        "vessel": ("DARK VESSEL #D137.062241", "D137.062241", "UNKNOWN",
+                   "Non-Broadcasting", "Dark Vessel", 140, True),
+        "sec_vessel": None,
     },
-    # 18: Galveston Bay - 2 SHIPS (Ship-to-Ship STS Bunkering Operation)
+    # 18 HORMUZ-DARK
     {
-        "loc": "Galveston Bay Approach", "eez": "US Territorial Waters", "lat": 29.15, "lon": -94.65,
-        "heading": 315, "type": "Anchorage Pool", "dark": False,
-        "vessel": ("MT Houston Pride", "Chemical Tanker", "Marshall Islands", "538008890", "9412550", 182),
-        "sec_vessel": ("Bunker Delta", "Bunkering Barge", "USA", "367009410", "8902140", 65, 0.015, 0.01, 310)
+        "name": "HORMUZ-DARK INC-018", "spill_type": "Trailing Wake",
+        "date": "2025-10-14T02:07:29Z", "date_display": "14 October 2025   02:07 UTC",
+        "location": "Gulf of Oman / Iranian EEZ Approach",
+        "area_km2": 7.1, "length_km": 11.0,
+        "eez": "Iran", "status": "Under Investigation",
+        "satellite": "Sentinel-1A", "orbit_pass": "S1A_IW_GRDH_1SDV_2025101",
+        "confidence": 90, "category": "Dark Vessel",
+        "comment": "Vessel position at 24.933, 57.630 with length ~80m",
+        "center_lat": 24.843, "center_lon": 57.615, "heading": 275,
+        "vessel": ("DARK VESSEL #D80.7133179", "D80.7133179", "UNKNOWN",
+                   "Non-Broadcasting", "Dark Vessel", 80, True),
+        "sec_vessel": None,
     },
-    # 19: Santa Barbara Channel - Trailing Wake
+    # 19 CAMPECHE-DARK
     {
-        "loc": "Santa Barbara Channel", "eez": "US EEZ", "lat": 34.25, "lon": -120.15,
-        "heading": 120, "type": "Trailing Wake", "dark": False,
-        "vessel": ("MV Pacific Trader", "Cargo", "Liberia", "636017840", "9655100", 220),
-        "sec_vessel": None
+        "name": "CAMPECHE-DARK INC-019", "spill_type": "Wind-Drift Pool",
+        "date": "2025-10-17T00:15:47Z", "date_display": "17 October 2025   00:15 UTC",
+        "location": "Bay of Campeche / Gulf of Mexico",
+        "area_km2": 26.3, "length_km": 23.0,
+        "eez": "Mexico", "status": "Under Investigation",
+        "satellite": "Sentinel-1A", "orbit_pass": "S1A_IW_GRDH_1SDV_2025101",
+        "confidence": 88, "category": "Dark Vessel",
+        "comment": "Occurs in known natural seep area. Vessel position at 19.438, -92.061 with length ~380m",
+        "center_lat": 19.407, "center_lon": -92.043, "heading": 50,
+        "vessel": ("DARK VESSEL #D379.082062", "D379.082062", "UNKNOWN",
+                   "Non-Broadcasting", "Dark Vessel", 380, True),
+        "sec_vessel": None,
     },
-    # 20: Prince William Sound - Trailing Wake
+    # 20 BONNY-DARK
     {
-        "loc": "Prince William Sound", "eez": "US Territorial Waters", "lat": 60.65, "lon": -147.05,
-        "heading": 210, "type": "Trailing Wake", "dark": False,
-        "vessel": ("MT Valdez Spirit", "Crude Tanker", "USA", "366992140", "9188400", 270),
-        "sec_vessel": None
+        "name": "BONNY-DARK INC-020", "spill_type": "Trailing Wake",
+        "date": "2026-01-13T17:45:03Z", "date_display": "13 January 2026   17:45 UTC",
+        "location": "Gulf of Guinea / Niger Delta Offshore",
+        "area_km2": 0.5, "length_km": 5.0,
+        "eez": "Nigeria", "status": "Under Investigation",
+        "satellite": "Sentinel-1A", "orbit_pass": "S1A_IW_GRDH_1SDV_2026011",
+        "confidence": 91, "category": "Dark Vessel",
+        "comment": "Vessel position at 4.302, 7.659 with length ~400m",
+        "center_lat": 4.324, "center_lon": 7.677, "heading": 195,
+        "vessel": ("DARK VESSEL #D396.112183", "D396.112183", "UNKNOWN",
+                   "Non-Broadcasting", "Dark Vessel", 400, True),
+        "sec_vessel": None,
     },
-    # 21: Strait of Hormuz - 2 SHIPS (Congested Corridor with crossing VLCC Tankers)
+    # 21 BLACK-SEA
     {
-        "loc": "Strait of Hormuz", "eez": "Oman EEZ", "lat": 26.55, "lon": 56.25,
-        "heading": 125, "type": "Trailing Wake", "dark": False,
-        "vessel": ("MT Gulf Horizon", "Crude Tanker", "Panama", "352001920", "9388100", 333),
-        "sec_vessel": ("MT Persian Star", "Oil Products Tanker", "Liberia", "636019910", "9541200", 228, -0.05, -0.04, 130)
+        "name": "BLACK-SEA INC-021", "spill_type": "Trailing Wake",
+        "date": "2025-03-13T15:27:46Z", "date_display": "13 March 2025   15:27 UTC",
+        "location": "Black Sea / Overlapping Claim Ukrainian EEZ",
+        "area_km2": 3.1, "length_km": 14.0,
+        "eez": "Overlapping claim Ukrainian", "status": "Under Investigation",
+        "satellite": "Sentinel-1A", "orbit_pass": "S1A_IW_GRDH_1SDV_2025031",
+        "confidence": 48, "category": "Low Confidence",
+        "comment": "Low confidence: Potential source without verified match link. Overlapping maritime claim zone.",
+        "center_lat": 43.893, "center_lon": 35.941, "heading": 55,
+        "vessel": ("Apache", "636022467", "8955586", "Liberia", "Cargo", 175, False),
+        "sec_vessel": None,
     },
-    # 22: Malacca Strait - 2 SHIPS (Congested TSS lane with overtaking container ships)
+    # 22 BERING-SEA
     {
-        "loc": "Malacca Strait", "eez": "Malaysia EEZ", "lat": 2.55, "lon": 101.55,
-        "heading": 130, "type": "Trailing Wake", "dark": False,
-        "vessel": ("MV Asian Pearl", "Container", "Singapore", "563004810", "9812400", 366),
-        "sec_vessel": ("MV Evergreen Glory", "Container", "Panama", "351009840", "9781400", 300, 0.04, 0.05, 135)
+        "name": "BERING-SEA INC-022", "spill_type": "Trailing Wake",
+        "date": "2025-10-18T06:04:55Z", "date_display": "18 October 2025   06:04 UTC",
+        "location": "Bering Sea / Russian Far East Offing",
+        "area_km2": 0.4, "length_km": 3.0,
+        "eez": "Russia", "status": "Under Investigation",
+        "satellite": "Sentinel-1A", "orbit_pass": "S1A_IW_GRDH_1SDV_2025101",
+        "confidence": 42, "category": "Low Confidence",
+        "comment": "Low confidence: No strong slick-source matches. Link between the slick and the source is relatively weak.",
+        "center_lat": 60.930, "center_lon": 173.998, "heading": 265,
+        "vessel": ("Alexandr Belyakov", "273825210", "8721260", "Russia", "Fishing", 65, False),
+        "sec_vessel": None,
     },
-    # 23: English Channel - Wind Drift Pool
+    # 23 OREGON
     {
-        "loc": "English Channel", "eez": "UK EEZ", "lat": 50.15, "lon": -1.05,
-        "heading": 245, "type": "Wind-Drift Pool", "dark": False,
-        "vessel": ("MT Channel Navigator", "Chemical Tanker", "Marshall Islands", "538009140", "9415800", 178),
-        "sec_vessel": None
+        "name": "OREGON INC-023", "spill_type": "Trailing Wake",
+        "date": "2026-02-05T14:22:25Z", "date_display": "05 February 2026   14:22 UTC",
+        "location": "Pacific Coast / Oregon Marine Sanctuary Limits",
+        "area_km2": 8.7, "length_km": 13.0,
+        "eez": "United States", "status": "Under Investigation",
+        "satellite": "Sentinel-1A", "orbit_pass": "S1A_IW_GRDH_1SDV_2026020",
+        "confidence": 45, "category": "Low Confidence",
+        "comment": "Low confidence: No strong slick-source matches. Link between the slick and the source is relatively weak.",
+        "center_lat": 45.031, "center_lon": -124.120, "heading": 205,
+        "vessel": ("Eddie & Rod", "367586950", "7047801", "United States", "Fishing", 65, False),
+        "sec_vessel": None,
     },
-    # 24: Niger Delta Offshore - DARK VESSEL (Sanction evasion / bunkering with AIS transponder off)
+    # 24 CHUKCHI-SEA
     {
-        "loc": "Niger Delta Offshore", "eez": "Nigeria EEZ", "lat": 4.15, "lon": 5.55,
-        "heading": 205, "type": "Trailing Wake", "dark": True,
-        "vessel": ("GHOST TANKER DELTA-9", "Crude Tanker", "Non-Broadcasting", "[AIS SILENT]", "UNKNOWN", 240),
-        "sec_vessel": None
+        "name": "CHUKCHI-SEA INC-024", "spill_type": "Trailing Wake",
+        "date": "2024-09-17T17:49:45Z", "date_display": "17 September 2024   17:49 UTC",
+        "location": "Arctic / Chukchi Sea Russian Border",
+        "area_km2": 4.1, "length_km": 12.0,
+        "eez": "Russia", "status": "Under Investigation",
+        "satellite": "Sentinel-1A", "orbit_pass": "S1A_IW_GRDH_1SDV_2024091",
+        "confidence": 40, "category": "Low Confidence",
+        "comment": "Low confidence: No strong slick-source matches. Link between the slick and the source is relatively weak. 1 AIS off event.",
+        "center_lat": 69.321, "center_lon": -171.040, "heading": 85,
+        "vessel": ("Seawind-1", "273426670", "8721143", "Russia", "Fishing", 65, False),
+        "sec_vessel": None,
     },
-    # 25: Mediterranean Sea - DARK VESSEL (Unflagged vessel off Libyan coast)
+    # 25 NEW-ZEALAND
     {
-        "loc": "Mediterranean Sea", "eez": "Libya EEZ", "lat": 33.25, "lon": 13.25,
-        "heading": 310, "type": "Wind-Drift Pool", "dark": True,
-        "vessel": ("UNIDENTIFIED CARGO (RADAR TARGET)", "Cargo", "Non-Broadcasting", "[AIS SILENT]", "UNKNOWN", 165),
-        "sec_vessel": None
-    }
+        "name": "NEW-ZEALAND INC-025", "spill_type": "Trailing Wake",
+        "date": "2026-05-08T07:37:23Z", "date_display": "08 May 2026   07:37 UTC",
+        "location": "South Pacific / Offshore South Island New Zealand",
+        "area_km2": 5.3, "length_km": 27.0,
+        "eez": "New Zealand", "status": "Under Investigation",
+        "satellite": "Sentinel-1D", "orbit_pass": "S1D_IW_GRDH_1SDV_2026050",
+        "confidence": 44, "category": "Low Confidence",
+        "comment": "Low confidence: No strong slick-source matches. Link between the slick and the source is relatively weak. 1 AIS off event.",
+        "center_lat": -46.010, "center_lon": 170.970, "heading": 310,
+        "vessel": ("Pacinui", "512430000", "8319770", "New Zealand", "Fishing", 65, False),
+        "sec_vessel": None,
+    },
 ]
 
+# ── Seed ──────────────────────────────────────────────────────────────────────
 db = SessionLocal()
 
-for idx, item in enumerate(LOCATIONS, start=1):
-    sim_date = datetime.now(timezone.utc) - timedelta(days=random.randint(1, 60))
-    length_km = round(random.uniform(15.0, 52.0), 1)
-    area_km2 = round(random.uniform(10.5, 45.0), 1)
-    
-    lon, lat = item["lon"], item["lat"]
-    heading = item["heading"]
-    spill_type = item["type"]
-    is_dark = item["dark"]
-    
-    # geometry according to  thaaa  spill type
-    if spill_type == "Trailing Wake":
+for item in INCIDENTS:
+    lon        = item["center_lon"]
+    lat        = item["center_lat"]
+    heading    = item["heading"]
+    length_km  = item["length_km"]
+    is_dark    = item["vessel"][6]
+    spill_type = item["spill_type"]
+
+    # Generate geometry
+    if spill_type == "Wind-Drift Pool":
+        track, poly, ship_lon, ship_lat = make_wind_drift_pool(lon, lat, heading, length_km)
+    else:
         track, poly, ship_lon, ship_lat = make_trailing_wake(lon, lat, heading, length_km)
-    elif spill_type == "Wind-Drift Pool":
-        track, poly, ship_lon, ship_lat = make_trailing_wake(lon, lat, heading, length_km)
-    else: # Anchorage Pool (ek hi jagha pe hai vo spill)
-        track, poly, ship_lon, ship_lat = make_anchorage_pool(lon, lat, heading)
-    
-    poly_wkt = f"SRID=4326;{poly.wkt}"
-    # If dark ship transponder track nahi kar payega
+
+    poly_wkt  = f"SRID=4326;{poly.wkt}"
     track_wkt = None if is_dark else f"SRID=4326;{track.wkt}"
 
     # Primary vessel
-    v_name, v_type, v_flag, v_mmsi, v_imo, v_len = item["vessel"]
+    v_name, v_mmsi, v_imo, v_flag, v_type, v_len, v_dark = item["vessel"]
     primary_vessel = Vessel(
         name=v_name, mmsi=v_mmsi, imo=v_imo, flag=v_flag,
-        vessel_type=v_type, length_m=v_len, is_dark=is_dark
+        vessel_type=v_type, length_m=v_len, is_dark=v_dark
     )
     db.add(primary_vessel)
     db.flush()
 
-    # Secondary vessel hai toh
-    sec_vessel_id = None
-    sec_track_wkt = None
-    sec_ship_lon = None
-    sec_ship_lat = None
-    
+    # Secondary vessel
+    sec_vessel_id  = None
+    sec_track_wkt  = None
+    sec_ship_lon   = None
+    sec_ship_lat   = None
+
     if item["sec_vessel"] is not None:
-        sv_name, sv_type, sv_flag, sv_mmsi, sv_imo, sv_len, d_lon, d_lat, s_heading = item["sec_vessel"]
+        sv = item["sec_vessel"]
+        sv_name, sv_mmsi, sv_imo, sv_flag, sv_type, sv_len, d_lon, d_lat, s_heading = sv
         sec_vessel_obj = Vessel(
             name=sv_name, mmsi=sv_mmsi, imo=sv_imo, flag=sv_flag,
             vessel_type=sv_type, length_m=sv_len, is_dark=False
@@ -321,33 +466,28 @@ for idx, item in enumerate(LOCATIONS, start=1):
         db.add(sec_vessel_obj)
         db.flush()
         sec_vessel_id = sec_vessel_obj.id
-        
-        # Secondary vessel track karega
-        sec_ship_lon = ship_lon + d_lon
-        sec_ship_lat = ship_lat + d_lat
-        s_rad = math.radians(s_heading)
-        sec_track = LineString([
-            (sec_ship_lon - 0.15 * math.sin(s_rad), sec_ship_lat - 0.15 * math.cos(s_rad)),
-            (sec_ship_lon - 0.05 * math.sin(s_rad), sec_ship_lat - 0.05 * math.cos(s_rad)),
-            (sec_ship_lon, sec_ship_lat)
-        ])
+        sec_track, sec_ship_lon, sec_ship_lat = make_secondary_track(
+            ship_lon, ship_lat, d_lon, d_lat, s_heading
+        )
         sec_track_wkt = f"SRID=4326;{sec_track.wkt}"
 
     incident = Incident(
         vessel_id=primary_vessel.id,
         secondary_vessel_id=sec_vessel_id,
-        name=f"{item['loc'].split()[0].upper()} INC-{idx:03d}",
-        spill_type=spill_type,
-        date=sim_date.strftime("%Y-%m-%dT%H:%M:%SZ"),
-        date_display=sim_date.strftime("%d %B %Y   %H:%M UTC"),
-        location=item["loc"],
-        area_km2=area_km2,
-        length_km=length_km,
+        name=item["name"],
+        spill_type=item["spill_type"],
+        date=item["date"],
+        date_display=item["date_display"],
+        location=item["location"],
+        area_km2=item["area_km2"],
+        length_km=item["length_km"],
         eez=item["eez"],
-        status=random.choice(["Confirmed", "Under Investigation"]),
-        satellite=random.choice(["Sentinel-1A", "Sentinel-1B"]),
-        orbit_pass=f"Pass #{random.randint(10000, 99999)}",
-        confidence=random.randint(91, 98)
+        status=item["status"],
+        satellite=item["satellite"],
+        orbit_pass=item["orbit_pass"],
+        confidence=item["confidence"],
+        category=item["category"],
+        comment=item["comment"],
     )
     db.add(incident)
     db.flush()
@@ -362,10 +502,11 @@ for idx, item in enumerate(LOCATIONS, start=1):
         ship_pos_lon=ship_lon,
         ship_pos_lat=ship_lat,
         secondary_ship_pos_lon=sec_ship_lon,
-        secondary_ship_pos_lat=sec_ship_lat
+        secondary_ship_pos_lat=sec_ship_lat,
     )
     db.add(spatial)
+    print(f"  [OK] {item['name']}")
 
 db.commit()
 db.close()
-print("Success: hogaya bhai")
+print("\nSuccess: hogaya bhai - all 25 incidents seeded with exact data.")

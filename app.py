@@ -5,6 +5,8 @@ from fastapi.responses import JSONResponse, FileResponse, StreamingResponse, Res
 from geoalchemy2.shape import to_shape
 from shapely.geometry import mapping
 
+from sqlalchemy.orm import joinedload
+
 from database import SessionLocal, Vessel, Incident, SpatialData
 from drift_engine import simulate_drift, get_current_metocean
 from pdf_generator import generate_icg_report
@@ -70,7 +72,11 @@ def format_spill(inc: Incident):
 @app.get("/api/spills")
 def get_spills():
     db = SessionLocal()
-    incidents = db.query(Incident).all()
+    incidents = db.query(Incident).options(
+        joinedload(Incident.vessel),
+        joinedload(Incident.secondary_vessel),
+        joinedload(Incident.spatial_data)
+    ).all()
     formatted = [format_spill(inc) for inc in incidents]
     db.close()
     
@@ -80,7 +86,11 @@ def get_spills():
 @app.get("/api/spills/{spill_id}")
 def get_spill(spill_id: int):
     db = SessionLocal()
-    inc = db.query(Incident).filter(Incident.id == spill_id).first()
+    inc = db.query(Incident).options(
+        joinedload(Incident.vessel),
+        joinedload(Incident.secondary_vessel),
+        joinedload(Incident.spatial_data)
+    ).filter(Incident.id == spill_id).first()
     db.close()
     if not inc:
         return JSONResponse(status_code=404, content={"error": "Spill not found"})
@@ -91,7 +101,9 @@ def get_spill(spill_id: int):
 @app.get("/api/stats")
 def get_stats():
     db = SessionLocal()
-    incidents = db.query(Incident).all()
+    incidents = db.query(Incident).options(
+        joinedload(Incident.vessel)
+    ).all()
     if not incidents:
         db.close()
         return {"total_spills": 0, "total_area_km2": 0, "dark_vessels": 0, "avg_confidence": 0}
