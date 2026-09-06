@@ -1,27 +1,6 @@
-"""
-drift_engine.py — Real-time Oil Spill Drift & Hindcast Engine.
-
-Data Sources (Open-Meteo Free APIs, No Key / No Signup Needed):
-1. Marine API: Ocean current velocity (m/s) & direction (deg)
-   https://marine-api.open-meteo.com/v1/marine?latitude={lat}&longitude={lon}&hourly=ocean_current_velocity,ocean_current_direction
-2. Forecast API: 10m Wind speed (km/h -> m/s) & direction (deg)
-   https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&hourly=windspeed_10m,winddirection_10m
-
-Drift & Leeway Physics Formulation:
-----------------------------------
-Total Drift Vector:
-  U_total = U_current + (0.03 * U_wind)
-
-Coriolis Deflection:
-  - North of Equator (lat >= 0): Wind component rotated +20° clockwise.
-  - South of Equator (lat < 0):  Wind component rotated -20° counterclockwise.
-
-Projection & Spreading:
-  - Vector addition of current + leeway to integrate hourly displacement.
-  - Forward forecast: predicts future trajectory (+24h, +48h).
-  - Backward hindcast: traces back where oil slick originated for vessel attribution.
-  - Viscous turbulent expansion buffer based on elapsed hours.
-"""
+# drift_engine.py — Real-time Oil Spill Drift & Hindcast Engine
+# Open-Meteo Marine + Weather APIs (free, no auth, no signup)
+# Physics: U_total = U_current + (0.03 × U_wind), Coriolis ±20° by hemisphere
 
 from __future__ import annotations
 
@@ -37,21 +16,18 @@ from shapely.geometry import Polygon, mapping
 
 logger = logging.getLogger(__name__)
 
-KM2_PER_DEG2 = 12_321.0  # (111 km/deg)^2 conversion
+KM2_PER_DEG2 = 12_321.0  # (111 km/deg)^2
 
 
 def _centroid_of(polygon_coords: list) -> Tuple[float, float]:
-    """Return (lon, lat) centroid of a polygon given as a list of coordinate pairs."""
+    """Return (lon, lat) centroid of a polygon coordinate list."""
     poly = Polygon(polygon_coords)
     return poly.centroid.x, poly.centroid.y
 
 
 @lru_cache(maxsize=128)
 def _fetch_openmeteo_feeds(round_lat: float, round_lon: float) -> Tuple[dict, dict]:
-    """
-    Query Open-Meteo Marine API and Weather Forecast API for live current and wind vectors.
-    Cached by 1 decimal place coordinate (~11 km grid resolution).
-    """
+    """Dual Open-Meteo fetch: marine currents + 10m wind. Cached per ~11 km grid cell."""
     marine_url = (
         f"https://marine-api.open-meteo.com/v1/marine?"
         f"latitude={round_lat}&longitude={round_lon}&"
@@ -87,22 +63,9 @@ def compute_hourly_drift_vector(
     lat: float, lon: float, hour_offset: int = 0
 ) -> Tuple[float, float, float, float, float, float]:
     """
-    Calculates total drift velocity vector (u_x, u_y) in m/s:
-      u_x = c_x + w_x
-      u_y = c_y + w_y
-
-    Where:
-      - Current vector (c_x, c_y):
-          c_x = c_speed * sin(rad(c_dir))
-          c_y = c_speed * cos(rad(c_dir))
-      - Wind leeway vector (w_x, w_y):
-          leeway = 0.03 * w_speed
-          rot_angle = +20 deg (lat >= 0) or -20 deg (lat < 0)
-          w_x = leeway * sin(rad(w_dir + rot_angle))
-          w_y = leeway * cos(rad(w_dir + rot_angle))
-
-    Returns:
-      (u_x, u_y, current_speed, current_dir, wind_speed, wind_dir)
+    Returns total drift vector (u_x, u_y) in m/s plus raw metocean scalars.
+    Formula: u = current_vector + 0.03 * wind_vector (Coriolis-rotated ±20°)
+    Returns: (u_x, u_y, c_speed, c_dir, w_speed_ms, w_dir)
     """
     r_lat = round(lat, 1)
     r_lon = round(lon, 1)
@@ -116,27 +79,13 @@ def compute_hourly_drift_vector(
 
     idx = min(max(0, hour_offset), len(c_vel_list) - 1) if c_vel_list else 0
 
-    # Ocean current: velocity in m/s, direction in degrees
-    if c_vel_list and c_vel_list[idx] is not None:
-        c_speed = float(c_vel_list[idx])
-    else:
-        c_speed = 0.25  # climatological fallback ~0.5 knots
+    # Ocean current — velocity in m/s, direction in degrees
+    c_speed = float(c_vel_list[idx]) if c_vel_list and c_vel_list[idx] is not None else 0.25
+    c_dir   = float(c_dir_list[idx]) if c_dir_list and c_dir_list[idx] is not None else 45.0
 
-    if c_dir_list and c_dir_list[idx] is not None:
-        c_dir = float(c_dir_list[idx])
-    else:
-        c_dir = 45.0
-
-    # Wind speed from Open-Meteo is km/h -> convert to m/s
-    if w_spd_list and w_spd_list[idx] is not None:
-        w_speed_ms = float(w_spd_list[idx]) / 3.6
-    else:
-        w_speed_ms = 5.0  # ~10 knots
-
-    if w_dir_list and w_dir_list[idx] is not None:
-        w_dir = float(w_dir_list[idx])
-    else:
-        w_dir = 225.0
+    # Wind speed from Open-Meteo arrives as km/h — convert to m/s
+    w_speed_ms = float(w_spd_list[idx]) / 3.6 if w_spd_list and w_spd_list[idx] is not None else 5.0
+    w_dir      = float(w_dir_list[idx])        if w_dir_list and w_dir_list[idx] is not None else 225.0
 
     # 1. Ocean current vector
     c_rad = math.radians(c_dir)
@@ -152,20 +101,16 @@ def compute_hourly_drift_vector(
     w_x = leeway_speed * math.sin(w_rad)
     w_y = leeway_speed * math.cos(w_rad)
 
-    # Total drift vector
     u_x = c_x + w_x
     u_y = c_y + w_y
 
     return u_x, u_y, c_speed, c_dir, w_speed_ms, w_dir
 
 
+# Dheere-dheere re mana, dheere sab kuchh hoy.
+#             Maali seenche sau ghada, ritu aaye phal hoy.
 def get_current_metocean(lat: float, lon: float) -> dict:
-    """
-    Returns live oceanographic and atmospheric vectors for a specific coordinate:
-    - Ocean Current Velocity (m/s & knots) and Direction (deg)
-    - Surface Wind Speed (m/s & km/h) and Direction (deg)
-    - Net Drift Speed (m/s & knots) and Heading (deg)
-    """
+    """Returns structured ocean current + wind + net drift for a coordinate."""
     u_x, u_y, c_speed, c_dir, w_speed_ms, w_dir = compute_hourly_drift_vector(lat, lon, hour_offset=0)
     drift_speed = math.sqrt(u_x * u_x + u_y * u_y)
     drift_dir = (math.degrees(math.atan2(u_x, u_y)) + 360.0) % 360.0
@@ -195,21 +140,12 @@ def simulate_drift(
     mode: str = "forecast",
 ) -> List[dict]:
     """
-    Computes oil slick drift using live Open-Meteo ocean currents and 10m wind.
+    Integrates hourly drift vectors to translate the oil slick polygon forward
+    (forecast) or backward (hindcast) in time.
 
-    Parameters:
-      polygon_coords : list of (lon, lat) tuples defining the detected slick.
-      hours : list of forecast intervals, e.g. [24, 48].
-      mode : 'forecast' (forward in time) or 'hindcast' (backward in time for origin attribution).
-
-    Returns:
-      List of dicts matching the API contract expected by app.py and map.js:
-      {
-          "forecast_hour": int,
-          "region": str,
-          "projected_area_km2": float,
-          "geometry": dict  # GeoJSON mapping
-      }
+    polygon_coords : list of (lon, lat) pairs
+    hours          : forecast intervals in hours, default [24, 48]
+    mode           : 'forecast' | 'hindcast'
     """
     if hours is None:
         hours = [24, 48]
@@ -221,10 +157,8 @@ def simulate_drift(
     sign = -1.0 if mode == "hindcast" else 1.0
     forecasts = []
 
-    # Step hour by hour to integrate displacement
-    cumulative_dx = 0.0  # meters
-    cumulative_dy = 0.0  # meters
-
+    cumulative_dx = 0.0  # metres
+    cumulative_dy = 0.0  # metres
     max_h = max(hours)
     step_displacements = {}
 
@@ -238,22 +172,21 @@ def simulate_drift(
         if step in hours:
             step_displacements[step] = (cumulative_dx, cumulative_dy)
 
+    # Bura jo dekhan main chala, bura na miliya koy.
+    #             Jo dil khoja aapna, mujhse bura na koy.
     for h in hours:
         dx, dy = step_displacements.get(h, (cumulative_dx, cumulative_dy))
 
-        # Convert meters displacement to degrees lat/lon
         d_lat = dy / 111_320.0
         cos_lat = math.cos(math.radians(center_lat))
         d_lon = dx / (111_320.0 * (cos_lat if abs(cos_lat) > 0.01 else 1.0))
 
-        # Translate slick polygon along trajectory
         shifted = translate(base_poly, xoff=d_lon, yoff=d_lat)
 
-        # Turbulent diffusion & spreading (Fay's gravity-viscous regime expansion)
+        # Turbulent diffusion — Fay's gravity-viscous spreading regime
         spread_deg = 0.005 * math.pow(h / 12.0, 0.6)
         diffused = shifted.buffer(spread_deg)
 
-        # Surface area expansion over time
         area_growth = 1.0 + 0.16 * math.pow(h, 0.62)
         projected_area = round(base_poly.area * KM2_PER_DEG2 * area_growth, 2)
 
@@ -266,8 +199,3 @@ def simulate_drift(
         })
 
     return forecasts
-
-
-def _physics_fallback(polygon_coords: list, hours: list) -> List[dict]:
-    """Safety fallback returning same schema if network is completely disabled."""
-    return simulate_drift(polygon_coords, hours, mode="forecast")

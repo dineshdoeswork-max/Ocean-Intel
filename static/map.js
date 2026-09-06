@@ -381,11 +381,9 @@ document.getElementById("btn-drift").addEventListener("click", async () => {
   const btn = document.getElementById("btn-drift");
   const originalHTML = btn.innerHTML;
 
-  // --- Show loading state ---
   btn.disabled = true;
   btn.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> Computing…`;
 
-  // Show a status toast below the panel
   let toast = document.getElementById("drift-toast");
   if (!toast) {
     toast = document.createElement("div");
@@ -426,7 +424,6 @@ document.getElementById("btn-drift").addEventListener("click", async () => {
       .addTo(forecastLayerGroup);
     });
 
-    // Fly map to show all forecast polygons
     try {
       const bounds = forecastLayerGroup.getBounds();
       if (bounds.isValid()) {
@@ -434,7 +431,6 @@ document.getElementById("btn-drift").addEventListener("click", async () => {
       }
     } catch(e) { /* ignore bounds error */ }
 
-    // Success toast
     toast.style.borderColor = "#10b981";
     toast.style.color = "#10b981";
     toast.innerHTML = `<i class="fa-solid fa-circle-check"></i> <strong>Drift forecast ready</strong><br/>

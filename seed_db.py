@@ -4,7 +4,6 @@ from datetime import datetime, timedelta, timezone
 from shapely.geometry import Point, LineString, Polygon
 from database import SessionLocal, Vessel, Incident, SpatialData, Base, engine
 
-# Reset tables cleanly before populating seed data
 print("Resetting database tables...")
 Base.metadata.drop_all(bind=engine)
 Base.metadata.create_all(bind=engine)
@@ -62,7 +61,7 @@ def make_wind_drift_pool(lon: float, lat: float, heading_deg: float, length_km: 
     pool_cx = lon + math.sin(drift_angle) * drift_dist
     pool_cy = lat + math.cos(drift_angle) * drift_dist
     
-    # Irregular amorphous pooling cloud
+    # Irregular amorphous pooling cloud if there is any aise toh hota nahi 
     pts = []
     num_pts = 16
     r_base = random.uniform(0.022, 0.038)
@@ -75,7 +74,7 @@ def make_wind_drift_pool(lon: float, lat: float, heading_deg: float, length_km: 
     return track, poly, ship_lon, ship_lat
 
 def make_anchorage_pool(lon: float, lat: float, heading_deg: float):
-    # Stationary / anchored ship has minimal swing movement
+    # Stationary orr anchored ship has minimal swing movement
     rad = math.radians(heading_deg)
     ux, uy = math.sin(rad), math.cos(rad)
     
@@ -286,16 +285,16 @@ for idx, item in enumerate(LOCATIONS, start=1):
     spill_type = item["type"]
     is_dark = item["dark"]
     
-    # Generate geometry according to morphological spill type
+    # geometry according to  thaaa  spill type
     if spill_type == "Trailing Wake":
         track, poly, ship_lon, ship_lat = make_trailing_wake(lon, lat, heading, length_km)
     elif spill_type == "Wind-Drift Pool":
         track, poly, ship_lon, ship_lat = make_trailing_wake(lon, lat, heading, length_km)
-    else: # Anchorage Pool
+    else: # Anchorage Pool (ek hi jagha pe hai vo spill)
         track, poly, ship_lon, ship_lat = make_anchorage_pool(lon, lat, heading)
     
     poly_wkt = f"SRID=4326;{poly.wkt}"
-    # If dark ship, transponder was silent: AIS track is either minimal or non-existent
+    # If dark ship transponder track nahi kar payega
     track_wkt = None if is_dark else f"SRID=4326;{track.wkt}"
 
     # Primary vessel
@@ -307,7 +306,7 @@ for idx, item in enumerate(LOCATIONS, start=1):
     db.add(primary_vessel)
     db.flush()
 
-    # Secondary vessel (if present)
+    # Secondary vessel hai toh
     sec_vessel_id = None
     sec_track_wkt = None
     sec_ship_lon = None
@@ -323,7 +322,7 @@ for idx, item in enumerate(LOCATIONS, start=1):
         db.flush()
         sec_vessel_id = sec_vessel_obj.id
         
-        # Secondary vessel coordinates and track
+        # Secondary vessel track karega
         sec_ship_lon = ship_lon + d_lon
         sec_ship_lat = ship_lat + d_lat
         s_rad = math.radians(s_heading)
@@ -369,4 +368,4 @@ for idx, item in enumerate(LOCATIONS, start=1):
 
 db.commit()
 db.close()
-print("Success: Database seeded with 25 Incidents (Morphologies: Wakes, Drift Pools, Anchorage Pools | 4 Dark Ships | 5 Multi-Vessel Scenarios).")
+print("Success: hogaya bhai")

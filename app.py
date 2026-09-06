@@ -1,5 +1,4 @@
 import os
-import concurrent.futures
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse, FileResponse, StreamingResponse, Response
@@ -11,6 +10,7 @@ from drift_engine import simulate_drift, get_current_metocean
 from pdf_generator import generate_icg_report
 
 app = FastAPI(title="Ocean Intel - Marine Protection Gang")
+
 
 def format_spill(inc: Incident):
     geom = mapping(to_shape(inc.spatial_data.geometry)) if inc.spatial_data and inc.spatial_data.geometry else None
@@ -86,6 +86,8 @@ def get_spill(spill_id: int):
         return JSONResponse(status_code=404, content={"error": "Spill not found"})
     return format_spill(inc)
 
+# Dukh mein sumiran sab kare, sukh mein karai na koy.
+#             Jo sukh mein sumiran kare, to dukh kaahe ko hoy.
 @app.get("/api/stats")
 def get_stats():
     db = SessionLocal()
@@ -182,6 +184,8 @@ def get_about():
 
 app.mount("/", StaticFiles(directory="static"), name="static")
 
+# Order kiya ek cheez, aaya kuch aur hi maal.
+#             Return karne baitha to, "no return" likha jhaal.
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("app:app", host="127.0.0.1", port=8000, reload=True)

@@ -61,7 +61,8 @@ class SpatialData(Base):
 
     incident = relationship("Incident", back_populates="spatial_data")
 
-# Create tables if they don't exist
+#          Saai itna dijiye, jaame kutum samaay.
+#             Main bhi bhookha na rahoon, saadhu na bhookha jaay.
 try:
     Base.metadata.create_all(bind=engine, checkfirst=True)
 except Exception:

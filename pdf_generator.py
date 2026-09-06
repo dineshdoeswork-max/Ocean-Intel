@@ -68,7 +68,7 @@ def generate_icg_report(spill_data: dict) -> io.BytesIO:
         elements.append(t_alert)
         elements.append(Spacer(1, 10))
 
-    # Overview Table with safely wrapped Paragraphs
+    
     overview = [
         [
             Paragraph("Detection Location", cell_bold), Paragraph(str(spill_data.get('location', '')), cell_normal),
@@ -101,7 +101,7 @@ def generate_icg_report(spill_data: dict) -> io.BytesIO:
     elements.append(t1)
     elements.append(Spacer(1, 14))
 
-    # Primary Correlated Vessel
+    # primary vessels
     elements.append(Paragraph("PRIMARY CORRELATED VESSEL DETAILS", styles['Heading3']))
     v = spill_data.get('vessel', {})
     v_len = f"{v.get('length_m')} m" if v.get('length_m') else "Unknown"
@@ -158,7 +158,7 @@ def generate_icg_report(spill_data: dict) -> io.BytesIO:
         elements.append(t3)
         elements.append(Spacer(1, 12))
 
-    # Operational Directive
+    
     elements.append(Paragraph("OPERATIONAL ACTION DIRECTIVE", styles['Heading3']))
     if is_dark:
         mandate = (
